@@ -40,7 +40,10 @@ if qual_file and acts_file:
             "aircraft": aircraft,
         })
 
-    df_qual = pd.DataFrame(pilots)
+    df_qual = pd.DataFrame(
+        pilots,
+        columns=["employee_id", "seat", "name", "base", "aircraft"],
+    )
 
     # -------------------------------
     # Parse ACTS file
@@ -63,7 +66,23 @@ if qual_file and acts_file:
             continue
         acts_data.append({"employee_id": emp_id, "date": date, "duty": duty, "base": base})
 
-    df_acts = pd.DataFrame(acts_data)
+    df_acts = pd.DataFrame(
+        acts_data,
+        columns=["employee_id", "date", "duty", "base"],
+    )
+
+    if df_acts.empty:
+        st.warning(
+            "No usable ACTS duty records were found. Please verify the file format and availability codes."
+        )
+
+    if df_qual.empty:
+        st.warning(
+            "No pilot qualification data was parsed from QUAL.xml. Please ensure the file is valid."
+        )
+
+    if df_acts.empty or df_qual.empty:
+        st.stop()
 
     # -------------------------------
     # Merge and process
