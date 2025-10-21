@@ -97,9 +97,17 @@ if qual_file and acts_file:
                     set(sic_df[sic_df["employee_id"] == sic_row.employee_id]["date"]))
                 )
                 if overlap_days > 0:
+                    pic_identifier = pic_row.get("name")
+                    if pd.isna(pic_identifier) or pic_identifier == "":
+                        pic_identifier = pic_row.get("employee_id")
+
+                    sic_identifier = sic_row.get("name")
+                    if pd.isna(sic_identifier) or sic_identifier == "":
+                        sic_identifier = sic_row.get("employee_id")
+
                     pair_results.append({
-                        "PIC": pic_row.name,
-                        "SIC": sic_row.name,
+                        "PIC": pic_identifier,
+                        "SIC": sic_identifier,
                         "Base": base,
                         "Aircraft": ac,
                         "Overlap Days": overlap_days
