@@ -13,7 +13,7 @@ st.write("Upload your QUAL.xml and ACTS file to visualize all possible PIC/SIC p
 # File uploaders
 # -------------------------------
 qual_file = st.file_uploader("Upload QUAL.xml", type=["xml"])
-acts_file = st.file_uploader("Upload ACTS file", type=["txt", "csv"])
+acts_file = st.file_uploader("Upload ACTS file")
 
 if qual_file and acts_file:
     # -------------------------------
@@ -68,7 +68,15 @@ if qual_file and acts_file:
     # -------------------------------
     # Merge and process
     # -------------------------------
-    merged = df_acts.merge(df_qual, on="employee_id", how="left")
+    merged = df_acts.merge(
+        df_qual,
+        on="employee_id",
+        how="left",
+        suffixes=("_acts", "_qual"),
+    )
+
+    merged["base"] = merged["base_qual"].combine_first(merged["base_acts"])
+    merged = merged.drop(columns=["base_acts", "base_qual"])
 
     # Filter available-only records for overlap computation
     available = merged[merged["duty"] == "Available"]
