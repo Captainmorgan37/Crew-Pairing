@@ -78,6 +78,22 @@ def categorise_aircraft(raw_aircraft):
     return None
 
 
+def initials_from_name(name):
+    """Return uppercase initials from a full name string.
+
+    If the value is missing or contains no alpha characters, ``None`` is
+    returned so downstream consumers can fall back gracefully (e.g., to
+    employee_id).
+    """
+
+    if pd.isna(name):
+        return None
+
+    parts = re.findall(r"[A-Za-z]+", str(name))
+    initials = "".join(part[0].upper() for part in parts if part)
+    return initials or None
+
+
 def build_daily_summary(merged_df, duty_code):
     """Return a wide dataframe of crew counts per day for a duty code (A or D)."""
 
@@ -257,3 +273,65 @@ if qual_file and acts_file:
     st.download_button(
         "Download D day summary (CSV)", d_days.to_csv(index=False).encode("utf-8"), "d_days.csv", "text/csv"
     )
+
+    # -------------------------------
+    # Debug view for a single date
+    # -------------------------------
+    st.write("### Debug: Pilot details for a specific date")
+    debug_date = st.date_input(
+        "Choose a date to inspect",
+        value=min_date,
+        min_value=min_date,
+        max_value=max_date,
+        key="debug_date",
+    )
+
+    day_slice = merged[merged["date"] == debug_date].copy()
+
+    if day_slice.empty:
+        st.info("No duty entries found on the selected date.")
+    else:
+        day_slice["initials"] = day_slice["name"].apply(initials_from_name)
+        day_slice["initials"] = day_slice["initials"].fillna(day_slice["employee_id"])
+
+        columns = [
+            "duty",
+            "aircraft_family",
+            "seat",
+            "initials",
+            "employee_id",
+            "name",
+            "base",
+        ]
+
+        display_df = (
+            day_slice[columns]
+            .rename(
+                columns={
+                    "duty": "Duty",
+                    "aircraft_family": "Aircraft",
+                    "seat": "Seat",
+                    "initials": "Initials",
+                    "employee_id": "Employee ID",
+                    "name": "Name",
+                    "base": "Base",
+                }
+            )
+            .sort_values(["Duty", "Aircraft", "Seat", "Initials"])
+        )
+
+        tab_a, tab_d = st.tabs(["A days", "D days"])
+
+        with tab_a:
+            a_details = display_df[display_df["Duty"] == "A"]
+            if a_details.empty:
+                st.info("No A duty pilots on this date.")
+            else:
+                st.dataframe(a_details, use_container_width=True)
+
+        with tab_d:
+            d_details = display_df[display_df["Duty"] == "D"]
+            if d_details.empty:
+                st.info("No D duty pilots on this date.")
+            else:
+                st.dataframe(d_details, use_container_width=True)
