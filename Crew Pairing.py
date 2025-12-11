@@ -1,72 +1,78 @@
-import math
-from math import atan2, cos, radians, sin, sqrt
-
 import pandas as pd
 import streamlit as st
 import xml.etree.ElementTree as ET
 
 
-# Approximate latitude/longitude for crew bases used to prioritise nearby pairings.
-# Values are expressed as (latitude, longitude) in decimal degrees.
-BASE_COORDINATES = {
-    "CYYC": (51.1139, -114.0203),  # Calgary
-    "CYLW": (49.9561, -119.3770),  # Kelowna
-    "CYVR": (49.1939, -123.1833),  # Vancouver
-    "CYEG": (53.3097, -113.5797),  # Edmonton
-    "CYXE": (52.1708, -106.7000),  # Saskatoon
-    "CYWG": (49.9100, -97.2399),   # Winnipeg
-    "CYYZ": (43.6777, -79.6248),   # Toronto Pearson
-    "CYUL": (45.4706, -73.7408),   # Montréal
-    "CYOW": (45.3225, -75.6692),   # Ottawa
-    "CYXU": (43.0356, -81.1539),   # London (Ontario)
+CATEGORY_LABELS = {
+    ("Embraer", "SIC"): "Embraer SICs",
+    ("Embraer", "PIC"): "Embraer PICs",
+    ("CJ3", "SIC"): "CJ3 SICs",
+    ("CJ3", "PIC"): "CJ3 PICs",
+    ("CJ2", "SIC"): "CJ2 SICs",
+    ("CJ2", "PIC"): "CJ2 PICs",
 }
 
 
-def haversine_distance_km(coord_a, coord_b):
-    """Return the great-circle distance in kilometres between two coordinates."""
+def categorise_aircraft(raw_aircraft):
+    """Map raw aircraft strings to the target aircraft families we report on."""
 
-    lat1, lon1 = coord_a
-    lat2, lon2 = coord_b
+    if pd.isna(raw_aircraft):
+        return None
 
-    rlat1, rlon1 = radians(lat1), radians(lon1)
-    rlat2, rlon2 = radians(lat2), radians(lon2)
-
-    dlat = rlat2 - rlat1
-    dlon = rlon2 - rlon1
-
-    a = sin(dlat / 2) ** 2 + cos(rlat1) * cos(rlat2) * sin(dlon / 2) ** 2
-    c = 2 * atan2(sqrt(a), sqrt(1 - a))
-    earth_radius_km = 6371.0
-    return earth_radius_km * c
+    value = str(raw_aircraft).strip().upper()
+    if value.startswith("EMB") or value.startswith("E"):  # Embraer family
+        return "Embraer"
+    if value.startswith("CJ3"):
+        return "CJ3"
+    if value.startswith("CJ2"):
+        return "CJ2"
+    return None
 
 
-def compute_base_distance(base_a, base_b, missing_registry):
-    """Distance in kilometres between two bases, tracking any that are unknown."""
+def build_daily_summary(merged_df, duty_code):
+    """Return a wide dataframe of crew counts per day for a duty code (A or D)."""
 
-    if pd.isna(base_a) or pd.isna(base_b):
-        return math.inf
+    filtered = merged_df[
+        (merged_df["duty"] == duty_code)
+        & merged_df["aircraft_family"].notna()
+        & merged_df["seat"].isin(["PIC", "SIC"])
+    ].copy()
 
-    base_a = str(base_a).strip().upper()
-    base_b = str(base_b).strip().upper()
-    if base_a == base_b:
-        return 0.0
+    if filtered.empty:
+        return pd.DataFrame(columns=["Date", *CATEGORY_LABELS.values()])
 
-    coord_a = BASE_COORDINATES.get(base_a)
-    coord_b = BASE_COORDINATES.get(base_b)
+    filtered["category"] = filtered.apply(
+        lambda row: CATEGORY_LABELS.get((row["aircraft_family"], row["seat"])), axis=1
+    )
+    filtered = filtered.dropna(subset=["category"])
 
-    if coord_a and coord_b:
-        return haversine_distance_km(coord_a, coord_b)
+    counts = (
+        filtered.groupby(["date", "category"], as_index=False)["employee_id"].nunique()
+    )
 
-    if not coord_a:
-        missing_registry.add(base_a)
-    if not coord_b:
-        missing_registry.add(base_b)
-    return math.inf
+    pivoted = counts.pivot_table(
+        index="date",
+        columns="category",
+        values="employee_id",
+        fill_value=0,
+    ).reset_index()
 
-st.set_page_config(page_title="Crew Pairing Optimizer", layout="wide")
-st.title("🧩 Crew Pairing Optimizer")
+    for col in CATEGORY_LABELS.values():
+        if col not in pivoted.columns:
+            pivoted[col] = 0
 
-st.write("Upload your QUAL.xml and ACTS file to visualize all possible PIC/SIC pairings by shared availability.")
+    ordered_columns = ["date", *CATEGORY_LABELS.values()]
+    pivoted = pivoted[ordered_columns].sort_values("date")
+    pivoted = pivoted.rename(columns={"date": "Date"})
+    return pivoted
+
+st.set_page_config(page_title="Crew Availability Overview", layout="wide")
+st.title("🧭 Crew Availability Overview")
+
+st.write(
+    "Upload QUAL.xml and an ACTS file to see how many PICs and SICs are on A and D days, "
+    "broken down by Embraer, CJ3, and CJ2 fleets."
+)
 
 # -------------------------------
 # File uploaders
@@ -114,16 +120,19 @@ if qual_file and acts_file:
         if len(parts) < 8:
             continue
         emp_id = parts[0]
-        code = parts[3]
+        code = parts[3].upper()
         base = parts[4]
         date = parts[7]
-        if code in ["A", "DRAFT"]:
-            duty = "Available"
-        elif code in ["OFF", "H", "Z"]:
-            duty = "Off"
-        else:
+        if code not in ["A", "D"]:
             continue
-        acts_data.append({"employee_id": emp_id, "date": date, "duty": duty, "base": base})
+        acts_data.append(
+            {
+                "employee_id": emp_id,
+                "date": date,
+                "duty": code,
+                "base": base,
+            }
+        )
 
     df_acts = pd.DataFrame(
         acts_data,
@@ -132,7 +141,7 @@ if qual_file and acts_file:
 
     if df_acts.empty:
         st.warning(
-            "No usable ACTS duty records were found. Please verify the file format and availability codes."
+            "No usable ACTS duty records were found. Please verify the file format and availability codes (A or D)."
         )
 
     if df_qual.empty:
@@ -156,84 +165,22 @@ if qual_file and acts_file:
     merged["base"] = merged["base_qual"].combine_first(merged["base_acts"])
     merged = merged.drop(columns=["base_acts", "base_qual"])
 
-    # Filter available-only records for overlap computation
-    available = merged[merged["duty"] == "Available"]
+    merged["aircraft_family"] = merged["aircraft"].apply(categorise_aircraft)
 
-    # Separate PIC/SIC
-    pic_df = available[available["seat"] == "PIC"]
-    sic_df = available[available["seat"] == "SIC"]
-
-    pic_availability = pic_df.groupby("employee_id")["date"].agg(set)
-    sic_availability = sic_df.groupby("employee_id")["date"].agg(set)
-
-    # -------------------------------
-    # Compute pair overlaps prioritising nearby bases
-    # -------------------------------
-    pair_results = []
-    missing_base_codes = set()
-
-    for ac, pic_group in pic_df.groupby("aircraft"):
-        sics = sic_df[sic_df["aircraft"] == ac]
-        if sics.empty:
-            continue
-
-        for _, pic_row in pic_group.iterrows():
-            pic_base = pic_row.get("base")
-            pic_dates = pic_availability.get(pic_row.employee_id, set())
-            if not pic_dates:
-                continue
-
-            sics_sorted = sics.assign(
-                base_distance=sics["base"].apply(
-                    lambda sic_base: compute_base_distance(pic_base, sic_base, missing_base_codes)
-                )
-            ).sort_values(by=["base_distance", "employee_id"], ascending=[True, True], kind="mergesort")
-
-            for _, sic_row in sics_sorted.iterrows():
-                sic_dates = sic_availability.get(sic_row.employee_id, set())
-                overlap_days = len(pic_dates.intersection(sic_dates))
-                if overlap_days == 0:
-                    continue
-
-                distance_km = sic_row["base_distance"]
-                distance_value = round(distance_km, 1) if math.isfinite(distance_km) else float("nan")
-
-                pic_identifier = pic_row.get("name")
-                if pd.isna(pic_identifier) or pic_identifier == "":
-                    pic_identifier = pic_row.get("employee_id")
-
-                sic_identifier = sic_row.get("name")
-                if pd.isna(sic_identifier) or sic_identifier == "":
-                    sic_identifier = sic_row.get("employee_id")
-
-                pair_results.append({
-                    "PIC": pic_identifier,
-                    "SIC": sic_identifier,
-                    "PIC Base": pic_base,
-                    "SIC Base": sic_row.get("base"),
-                    "Aircraft": ac,
-                    "Base Distance (km)": distance_value,
-                    "Overlap Days": overlap_days,
-                })
-
-    df_pairs = pd.DataFrame(pair_results)
-    if not df_pairs.empty:
-        df_pairs = df_pairs.sort_values(
-            by=["Base Distance (km)", "Overlap Days"],
-            ascending=[True, False],
-            na_position="last",
-        )
-
-    if missing_base_codes:
-        missing_list = ", ".join(sorted(missing_base_codes))
-        st.info(
-            "No coordinates were configured for the following bases: "
-            f"{missing_list}. Add them to BASE_COORDINATES to improve distance prioritisation."
-        )
+    a_days = build_daily_summary(merged, "A")
+    d_days = build_daily_summary(merged, "D")
 
     st.success(f"Parsed {len(df_qual)} pilots and {len(df_acts)} duty entries.")
-    st.write("### Top Pairings by Overlap")
-    st.dataframe(df_pairs, use_container_width=True)
 
-    csv = df_pairs.to_csv(index=False).encode('utf-8')
-    st.download_button("Download Pairing Results (CSV)", csv, "pairings.csv", "text/csv")
+    st.write("### Counts on A days")
+    st.dataframe(a_days, use_container_width=True)
+
+    st.write("### Counts on D days")
+    st.dataframe(d_days, use_container_width=True)
+
+    st.download_button(
+        "Download A day summary (CSV)", a_days.to_csv(index=False).encode("utf-8"), "a_days.csv", "text/csv"
+    )
+    st.download_button(
+        "Download D day summary (CSV)", d_days.to_csv(index=False).encode("utf-8"), "d_days.csv", "text/csv"
+    )
