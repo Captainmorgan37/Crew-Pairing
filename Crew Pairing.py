@@ -1,4 +1,5 @@
 import pandas as pd
+import re
 import streamlit as st
 import xml.etree.ElementTree as ET
 
@@ -11,6 +12,51 @@ CATEGORY_LABELS = {
     ("CJ2", "SIC"): "CJ2 SICs",
     ("CJ2", "PIC"): "CJ2 PICs",
 }
+
+
+DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}$")
+
+
+def parse_acts_line(line):
+    """Return a list of duty entries for a single ACTS line.
+
+    Standard lines contain a single duty date, while some represent a span with
+    explicit start/end dates. We return one entry per calendar date covered by
+    the duty span. If the line contains a relevant duty code (A/D) but no
+    recognizable dates, an empty list is returned.
+    """
+
+    parts = line.split()
+    if len(parts) < 8:
+        return None
+
+    emp_id = parts[0]
+    code = parts[3].upper()
+    base = parts[4]
+
+    if code not in ["A", "D"]:
+        return None
+
+    date_tokens = [token for token in parts[7:] if DATE_PATTERN.match(token)]
+    if not date_tokens:
+        return []
+
+    start_date = pd.to_datetime(date_tokens[0], errors="coerce")
+    end_date = (
+        pd.to_datetime(date_tokens[1], errors="coerce") if len(date_tokens) > 1 else start_date
+    )
+
+    if pd.isna(start_date) or pd.isna(end_date):
+        return []
+
+    if end_date < start_date:
+        end_date = start_date
+
+    dates = pd.date_range(start=start_date, end=end_date, freq="D")
+    return [
+        {"employee_id": emp_id, "date": single.date(), "duty": code, "base": base}
+        for single in dates
+    ]
 
 
 def categorise_aircraft(raw_aircraft):
@@ -114,25 +160,16 @@ if qual_file and acts_file:
     # Parse ACTS file
     # -------------------------------
     acts_data = []
+    invalid_date_lines = 0
     text = acts_file.read().decode("utf-8")
     for line in text.splitlines():
-        parts = line.split()
-        if len(parts) < 8:
+        entries = parse_acts_line(line)
+        if entries is None:
             continue
-        emp_id = parts[0]
-        code = parts[3].upper()
-        base = parts[4]
-        date = parts[7]
-        if code not in ["A", "D"]:
+        if not entries:
+            invalid_date_lines += 1
             continue
-        acts_data.append(
-            {
-                "employee_id": emp_id,
-                "date": date,
-                "duty": code,
-                "base": base,
-            }
-        )
+        acts_data.extend(entries)
 
     df_acts = pd.DataFrame(
         acts_data,
@@ -141,9 +178,10 @@ if qual_file and acts_file:
 
     df_acts["date"] = pd.to_datetime(df_acts["date"], errors="coerce").dt.date
     invalid_dates = df_acts["date"].isna().sum()
-    if invalid_dates:
+    if invalid_dates or invalid_date_lines:
+        skipped = invalid_dates + invalid_date_lines
         st.warning(
-            f"{invalid_dates} duty entries had unrecognized dates and were skipped."
+            f"{skipped} duty entries had unrecognized dates and were skipped."
         )
     df_acts = df_acts.dropna(subset=["date"])
 
