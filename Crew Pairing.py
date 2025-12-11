@@ -165,34 +165,53 @@ def load_restrictions(xlsx_file):
             "Reading Excel restrictions requires the optional 'openpyxl' dependency. "
             "Please install it (pip install openpyxl) and try again."
         )
-        st.stop()
+        return None
 
-    normalised_columns = {
+    def normalise(col_name):
+        if col_name is None:
+            return ""
+        cleaned = re.sub(r"[^a-z0-9]+", " ", str(col_name).strip().lower())
+        return " ".join(cleaned.split())
+
+    column_aliases = {
         "pilot last name": "last_name",
+        "last name": "last_name",
         "pilot initials": "initials",
+        "initials": "initials",
         "status": "status",
         "restriction": "restriction_text",
+        "restriction text": "restriction_text",
+        "ok to fly as f o": "ok_fo",
         "ok to fly as f/o": "ok_fo",
+        "ok to fly as fo": "ok_fo",
     }
 
-    df = df.rename(columns={
-        col: normalised_columns.get(str(col).strip().lower(), col) for col in df.columns
-    })
+    renamed_columns = {}
+    for col in df.columns:
+        target = column_aliases.get(normalise(col))
+        if target:
+            renamed_columns[col] = target
 
+    df = df.rename(columns=renamed_columns)
+
+    normalized_available = {column_aliases.get(normalise(col), normalise(col)) for col in df.columns}
     required_columns = ["initials", "status", "restriction_text"]
-    missing_cols = [col for col in required_columns if col not in df.columns]
+    missing_cols = [col for col in required_columns if col not in normalized_available]
     if missing_cols:
         st.error(
             "Restrictions file is missing expected columns: "
             + ", ".join(missing_cols)
+            + " (found: "
+            + ", ".join(sorted(normalized_available))
+            + ")"
         )
-        st.stop()
+        return None
 
-    df = df[df["status"].fillna("").str.upper() == "RESTRICTION"]
+    df = df[df.get("status", "").fillna("").str.upper() == "RESTRICTION"]
 
     # Extract disallowed initials list (comma/space separated)
     df["restricted_initials"] = (
-        df["restriction_text"]
+        df.get("restriction_text", pd.Series(dtype=str))
         .fillna("")
         .str.replace("Do not fly with", "", case=False)
         .str.replace("Do not crew together without vetting with DP", "", case=False)
@@ -254,7 +273,8 @@ restriction_map = {}
 
 if restrictions_file:
     restrictions_df = load_restrictions(restrictions_file)
-    restriction_map = build_restriction_map(restrictions_df)
+    if restrictions_df is not None:
+        restriction_map = build_restriction_map(restrictions_df)
 
 if qual_file and acts_file:
     # -------------------------------
