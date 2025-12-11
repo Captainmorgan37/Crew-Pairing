@@ -158,7 +158,14 @@ def build_daily_summary(merged_df, duty_code):
 
 
 def load_restrictions(xlsx_file):
-    df = pd.read_excel(xlsx_file, sheet_name=0)
+    try:
+        df = pd.read_excel(xlsx_file, sheet_name=0)
+    except ImportError:
+        st.error(
+            "Reading Excel restrictions requires the optional 'openpyxl' dependency. "
+            "Please install it (pip install openpyxl) and try again."
+        )
+        st.stop()
 
     df = df.rename(columns={
         "Pilot Last Name": "last_name",
