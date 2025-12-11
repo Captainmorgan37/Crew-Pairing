@@ -156,100 +156,6 @@ def build_daily_summary(merged_df, duty_code):
     pivoted = pivoted.rename(columns={"date": "Date"})
     return pivoted
 
-
-def load_restrictions(xlsx_file):
-    try:
-        df = pd.read_excel(restrictions_file, sheet_name=0, header=0)
-    except ImportError:
-        st.error(
-            "Reading Excel restrictions requires the optional 'openpyxl' dependency. "
-            "Please install it (pip install openpyxl) and try again."
-        )
-        return None
-
-    def normalise(col_name):
-        if col_name is None:
-            return ""
-        cleaned = re.sub(r"[^a-z0-9]+", " ", str(col_name).strip().lower())
-        return " ".join(cleaned.split())
-
-    column_aliases = {
-        "pilot last name": "last_name",
-        "last name": "last_name",
-        "pilot initials": "initials",
-        "initials": "initials",
-        "status": "status",
-        "restriction": "restriction_text",
-        "restriction text": "restriction_text",
-        "ok to fly as f o": "ok_fo",
-        "ok to fly as f/o": "ok_fo",
-        "ok to fly as fo": "ok_fo",
-    }
-
-    renamed_columns = {}
-    for col in df.columns:
-        target = column_aliases.get(normalise(col))
-        if target:
-            renamed_columns[col] = target
-
-    df = df.rename(columns=renamed_columns)
-
-    normalized_available = {column_aliases.get(normalise(col), normalise(col)) for col in df.columns}
-    required_columns = ["initials", "status", "restriction_text"]
-    missing_cols = [col for col in required_columns if col not in normalized_available]
-    if missing_cols:
-        st.error(
-            "Restrictions file is missing expected columns: "
-            + ", ".join(missing_cols)
-            + " (found: "
-            + ", ".join(sorted(normalized_available))
-            + ")"
-        )
-        return None
-
-    df = df[df.get("status", "").fillna("").str.upper() == "RESTRICTION"]
-
-    # Extract disallowed initials list (comma/space separated)
-    df["restricted_initials"] = (
-        df.get("restriction_text", pd.Series(dtype=str))
-        .fillna("")
-        .str.replace("Do not fly with", "", case=False)
-        .str.replace("Do not crew together without vetting with DP", "", case=False)
-        .str.replace("Do not crew on flights to Europe PIC or SIC", "", case=False)
-        .str.replace("(", "")
-        .str.replace(")", "")
-        .str.replace("and", ",")
-        .str.replace("/", ",")
-        .apply(lambda x: [i.strip().upper() for i in re.split(r"[ ,]+", x) if len(i.strip()) > 1])
-    )
-
-    return df
-
-
-def build_restriction_map(df_restrictions):
-    restriction_map = {}
-    for _, row in df_restrictions.iterrows():
-        pic_init = str(row["initials"]).upper()
-        restricted = set(row["restricted_initials"])
-        restriction_map[pic_init] = restricted
-    return restriction_map
-
-
-def find_valid_pairs(pics, sics, restriction_map):
-    valid_pairs = []
-    invalid_pairs = []
-
-    for pic in pics:
-        restricted_sics = restriction_map.get(pic, set())
-
-        for sic in sics:
-            if sic in restricted_sics:
-                invalid_pairs.append((pic, sic))
-            else:
-                valid_pairs.append((pic, sic))
-
-    return valid_pairs, invalid_pairs
-
 st.set_page_config(page_title="Crew Availability Overview", layout="wide")
 st.title("🧭 Crew Availability Overview")
 
@@ -263,18 +169,6 @@ st.write(
 # -------------------------------
 qual_file = st.file_uploader("Upload QUAL.xml", type=["xml"])
 acts_file = st.file_uploader("Upload ACTS file")
-restrictions_file = st.file_uploader(
-    "Upload Crewing Restrictions Excel",
-    type=["xlsx"],
-)
-
-restrictions_df = None
-restriction_map = {}
-
-if restrictions_file:
-    restrictions_df = load_restrictions(restrictions_file)
-    if restrictions_df is not None:
-        restriction_map = build_restriction_map(restrictions_df)
 
 if qual_file and acts_file:
     # -------------------------------
@@ -451,24 +345,7 @@ if qual_file and acts_file:
             .sort_values(["Duty", "Aircraft", "Seat", "Initials"])
         )
 
-        pics = (
-            day_slice[(day_slice["seat"] == "PIC")]["initials"]
-            .dropna()
-            .astype(str)
-            .str.strip()
-            .str.upper()
-            .tolist()
-        )
-        sics = (
-            day_slice[(day_slice["seat"] == "SIC")]["initials"]
-            .dropna()
-            .astype(str)
-            .str.strip()
-            .str.upper()
-            .tolist()
-        )
-
-        tab_a, tab_d, tab_restrictions = st.tabs(["A days", "D days", "Restrictions"])
+        tab_a, tab_d = st.tabs(["A days", "D days"])
 
         with tab_a:
             a_details = display_df[display_df["Duty"] == "A"]
@@ -483,45 +360,3 @@ if qual_file and acts_file:
                 st.info("No D duty pilots on this date.")
             else:
                 st.dataframe(d_details, use_container_width=True)
-
-        with tab_restrictions:
-            if not restriction_map:
-                st.info("Upload Crewing Restrictions Excel to enable restriction analysis.")
-            else:
-                restricted_pics_today = [p for p in pics if p in restriction_map]
-                restricted_sics_today = [
-                    s for s in sics if any(s in restriction_map[p] for p in restriction_map)
-                ]
-
-                st.subheader("Crew Restriction Summary")
-                st.write(f"Restricted PICs today: {len(restricted_pics_today)}")
-                st.write(f"Restricted SICs today: {len(restricted_sics_today)}")
-
-                st.write("PICs with restrictions today:")
-                if restricted_pics_today:
-                    st.dataframe(pd.DataFrame(restricted_pics_today, columns=["PIC"]))
-                else:
-                    st.info("No PIC restrictions matched today.")
-
-                st.write("SICs affected by restrictions today:")
-                if restricted_sics_today:
-                    st.dataframe(pd.DataFrame(restricted_sics_today, columns=["SIC"]))
-                else:
-                    st.info("No SICs are blocked by restrictions today.")
-
-                valid_pairs, invalid_pairs = find_valid_pairs(pics, sics, restriction_map)
-
-                st.write("Valid PIC/SIC pairings:")
-                if valid_pairs:
-                    st.dataframe(pd.DataFrame(valid_pairs, columns=["PIC", "SIC"]))
-                else:
-                    st.info("No valid pairings available based on current restrictions.")
-
-                if invalid_pairs:
-                    st.warning("Restricted PIC/SIC combinations:")
-                    st.dataframe(pd.DataFrame(invalid_pairs, columns=["PIC", "SIC"]))
-
-                if not valid_pairs and "CJ2" in day_slice["aircraft_family"].dropna().unique():
-                    st.error(
-                        "⚠ No valid PIC/SIC combinations available for CJ2 today due to restrictions."
-                    )
