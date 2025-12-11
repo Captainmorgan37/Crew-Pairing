@@ -159,7 +159,7 @@ def build_daily_summary(merged_df, duty_code):
 
 def load_restrictions(xlsx_file):
     try:
-        df = pd.read_excel(xlsx_file, sheet_name=0)
+        df = pd.read_excel(restrictions_file, sheet_name=0, header=0)
     except ImportError:
         st.error(
             "Reading Excel restrictions requires the optional 'openpyxl' dependency. "
