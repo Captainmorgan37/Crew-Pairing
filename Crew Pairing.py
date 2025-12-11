@@ -167,15 +167,28 @@ def load_restrictions(xlsx_file):
         )
         st.stop()
 
+    normalised_columns = {
+        "pilot last name": "last_name",
+        "pilot initials": "initials",
+        "status": "status",
+        "restriction": "restriction_text",
+        "ok to fly as f/o": "ok_fo",
+    }
+
     df = df.rename(columns={
-        "Pilot Last Name": "last_name",
-        "Pilot Initials": "initials",
-        "Status": "status",
-        "Restriction": "restriction_text",
-        "OK to Fly As F/O": "ok_fo",
+        col: normalised_columns.get(str(col).strip().lower(), col) for col in df.columns
     })
 
-    df = df[df["status"].str.upper() == "RESTRICTION"]
+    required_columns = ["initials", "status", "restriction_text"]
+    missing_cols = [col for col in required_columns if col not in df.columns]
+    if missing_cols:
+        st.error(
+            "Restrictions file is missing expected columns: "
+            + ", ".join(missing_cols)
+        )
+        st.stop()
+
+    df = df[df["status"].fillna("").str.upper() == "RESTRICTION"]
 
     # Extract disallowed initials list (comma/space separated)
     df["restricted_initials"] = (
