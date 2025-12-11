@@ -31,7 +31,8 @@ def parse_acts_line(line):
         return None
 
     emp_id = parts[0]
-    code = parts[3].upper()
+    raw_code = parts[3].upper()
+    code = "D" if raw_code.startswith("DRAFT") else raw_code
     base = parts[4]
 
     if code not in ["A", "D"]:
@@ -66,6 +67,8 @@ def categorise_aircraft(raw_aircraft):
         return None
 
     value = str(raw_aircraft).strip().upper()
+    if value.startswith("L450"):
+        return "Embraer"
     if value.startswith("EMB") or value.startswith("E"):  # Embraer family
         return "Embraer"
     if value.startswith("CJ3"):
