@@ -15,6 +15,7 @@ CATEGORY_LABELS = {
 
 
 DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}$")
+TIME_PATTERN = re.compile(r"\d{2}:\d{2}$")
 
 
 def parse_acts_line(line):
@@ -38,19 +39,43 @@ def parse_acts_line(line):
     if code not in ["A", "D"]:
         return None
 
-    date_tokens = [token for token in parts[7:] if DATE_PATTERN.match(token)]
-    if not date_tokens:
+    date_indices = [i for i, token in enumerate(parts[7:], start=7) if DATE_PATTERN.match(token)]
+    if not date_indices:
         return []
 
-    start_date = pd.to_datetime(date_tokens[0], errors="coerce")
-    end_date = (
-        pd.to_datetime(date_tokens[1], errors="coerce") if len(date_tokens) > 1 else start_date
+    start_idx = date_indices[0]
+    start_date = pd.to_datetime(parts[start_idx], errors="coerce")
+    start_time = (
+        parts[start_idx + 1]
+        if start_idx + 1 < len(parts) and TIME_PATTERN.match(parts[start_idx + 1])
+        else None
     )
+
+    if len(date_indices) > 1:
+        end_idx = date_indices[1]
+        end_date = pd.to_datetime(parts[end_idx], errors="coerce")
+        end_time = (
+            parts[end_idx + 1]
+            if end_idx + 1 < len(parts) and TIME_PATTERN.match(parts[end_idx + 1])
+            else None
+        )
+    else:
+        end_date = start_date
+        end_time = None
 
     if pd.isna(start_date) or pd.isna(end_date):
         return []
 
     if end_date < start_date:
+        end_date = start_date
+
+    # Some off-duty spans end in the early hours of the following day (e.g.,
+    # 07:00–06:59). Those should count only for the start date, not the next day.
+    if (
+        end_date == start_date + pd.Timedelta(days=1)
+        and end_time is not None
+        and end_time <= "06:59"
+    ):
         end_date = start_date
 
     dates = pd.date_range(start=start_date, end=end_date, freq="D")
