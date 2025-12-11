@@ -139,6 +139,14 @@ if qual_file and acts_file:
         columns=["employee_id", "date", "duty", "base"],
     )
 
+    df_acts["date"] = pd.to_datetime(df_acts["date"], errors="coerce").dt.date
+    invalid_dates = df_acts["date"].isna().sum()
+    if invalid_dates:
+        st.warning(
+            f"{invalid_dates} duty entries had unrecognized dates and were skipped."
+        )
+    df_acts = df_acts.dropna(subset=["date"])
+
     if df_acts.empty:
         st.warning(
             "No usable ACTS duty records were found. Please verify the file format and availability codes (A or D)."
@@ -167,10 +175,34 @@ if qual_file and acts_file:
 
     merged["aircraft_family"] = merged["aircraft"].apply(categorise_aircraft)
 
-    a_days = build_daily_summary(merged, "A")
-    d_days = build_daily_summary(merged, "D")
+    min_date = merged["date"].min()
+    max_date = merged["date"].max()
 
-    st.success(f"Parsed {len(df_qual)} pilots and {len(df_acts)} duty entries.")
+    st.write("### Date range")
+    selected_range = st.date_input(
+        "Select the range of dates to include",
+        value=(min_date, max_date),
+        min_value=min_date,
+        max_value=max_date,
+    )
+
+    if not isinstance(selected_range, tuple) or len(selected_range) != 2:
+        st.error("Please select both a start and end date.")
+        st.stop()
+
+    start_date, end_date = selected_range
+
+    filtered = merged[(merged["date"] >= start_date) & (merged["date"] <= end_date)]
+    if filtered.empty:
+        st.warning("No duty entries fall within the selected date range.")
+        st.stop()
+
+    a_days = build_daily_summary(filtered, "A")
+    d_days = build_daily_summary(filtered, "D")
+
+    st.success(
+        f"Parsed {len(df_qual)} pilots and {len(filtered)} duty entries within the selected range."
+    )
 
     st.write("### Counts on A days")
     st.dataframe(a_days, use_container_width=True)
